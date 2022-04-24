@@ -166,8 +166,8 @@ Resources:
   BucketCleanupLambda:
     Type: AWS::Lambda::Function
     Properties:
-      Runtime: python2.7
-      MemorySize: 128
+      Runtime: python3.9
+      MemorySize: 256
       Timeout: 30
       Role: !GetAtt BucketCleanupLambdaIAMRole.Arn
       Handler: index.lambda_handler
@@ -175,18 +175,25 @@ Resources:
         ZipFile: |
           import boto3
           import sys
-          import cfnresponse
+          import urllib3
+          import json
+
+          s3_client = boto3.client('s3')
+          http = urllib3.PoolManager()
 
           def lambda_handler(event, context):
             print('Incoming Event: {0}'.format(event) )
-            execution_status = 'SUCCESS'
             response_data = {}
+            response_data['PhysicalResourceId'] = 'hardcodedphyscialid'
+            response_data['Status'] = 'SUCCESS'
+            response_data['StackId'] = event['StackId']
+            response_data['RequestId'] = event['RequestId']    
+            response_data['LogicalResourceId'] = event['LogicalResourceId']
+            cfn_response_url = event['ResponseURL']
 
             if event['RequestType'] == 'Delete':
               try:
-                # client inside method because we only need it once
                 bucket_name = event['ResourceProperties']['BucketName']
-                s3_client = boto3.client('s3')
                 # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.list_objects_v2                
                 objects_list = s3_client.list_objects_v2(
                     Bucket = bucket_name
@@ -201,17 +208,20 @@ Resources:
                     print('delete_object_response: {0}'.format(delete_object_response))
                 else:
                   print('Nothing to delete .. ')
+                  
+                response_data['Status'] = 'SUCCESS'
                                 
               except:
                 print("Unexpected error: ", sys.exc_info())
-                execution_status = 'FAILED'
+                response_data['Status'] = 'FAILED'
                 response_data['Reason'] = 'See the details in CloudWatch Log Stream: ' + context.log_stream_name
             
             else:
               print('RequestType: {0}'.format(event['RequestType']))
 
-            cfnresponse.send(event, context, execution_status , response_data, 'value')
-            return event
+            http.request('PUT', cfn_response_url, body=json.dumps(response_data).encode('utf-8'), headers={'Content-Type': 'application/json'})
+            return event  
+  
   BucketCleanupLambdaIAMRole:
     Type: AWS::IAM::Role
     Properties:
